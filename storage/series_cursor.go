@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"bytes"
 	"errors"
 	"sort"
 	"sync"
@@ -11,13 +12,18 @@ import (
 	"github.com/influxdata/influxql"
 )
 
+var (
+	ErrUnexpectedOrg = errors.New("unexpected org")
+)
+
 type SeriesCursor interface {
 	Close() error
 	Next() (*SeriesCursorRow, error)
 }
 
 type SeriesCursorRequest struct {
-	Measurements tsdb.MeasurementIterator
+	// Name contains the tsdb encoded org and bucket ID
+	Name [16]byte
 }
 
 // seriesCursor is an implementation of SeriesCursor over an tsi1.Index.
@@ -25,6 +31,7 @@ type seriesCursor struct {
 	once  sync.Once
 	index *tsi1.Index
 	mitr  tsdb.MeasurementIterator
+	orgID []byte
 	keys  [][]byte
 	ofs   int
 	row   SeriesCursorRow
@@ -53,17 +60,10 @@ func newSeriesCursor(req SeriesCursorRequest, index *tsi1.Index, cond influxql.E
 		return nil, err
 	}
 
-	mitr := req.Measurements
-	if mitr == nil {
-		mitr, err = index.MeasurementIterator()
-		if err != nil {
-			return nil, err
-		}
-	}
-
 	return &seriesCursor{
 		index: index,
-		mitr:  mitr,
+		mitr:  tsdb.NewMeasurementSliceIterator([][]byte{req.Name[:]}),
+		orgID: req.Name[:8],
 		cond:  cond,
 	}, nil
 }
@@ -98,6 +98,9 @@ func (cur *seriesCursor) Next() (*SeriesCursorRow, error) {
 		}
 
 		cur.row.Name, cur.row.Tags = tsdb.ParseSeriesKey(cur.keys[cur.ofs])
+		if !bytes.HasPrefix(cur.row.Name, cur.orgID) {
+			return nil, ErrUnexpectedOrg
+		}
 		cur.ofs++
 		return &cur.row, nil
 	}
