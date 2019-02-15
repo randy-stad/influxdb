@@ -13,9 +13,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/influxdata/flux"
 	platform "github.com/influxdata/influxdb"
 	"github.com/influxdata/influxdb/authorizer"
 	pcontext "github.com/influxdata/influxdb/context"
+	"github.com/influxdata/influxdb/query"
 	"github.com/influxdata/influxdb/task/backend"
 	"github.com/julienschmidt/httprouter"
 	"go.uber.org/zap"
@@ -32,6 +34,7 @@ type TaskBackend struct {
 	UserResourceMappingService platform.UserResourceMappingService
 	LabelService               platform.LabelService
 	UserService                platform.UserService
+	BucketService              platform.BucketService
 }
 
 // NewTaskBackend returns a new instance of TaskBackend.
@@ -44,6 +47,7 @@ func NewTaskBackend(b *APIBackend) *TaskBackend {
 		UserResourceMappingService: b.UserResourceMappingService,
 		LabelService:               b.LabelService,
 		UserService:                b.UserService,
+		BucketService:              b.BucketService,
 	}
 }
 
@@ -58,6 +62,7 @@ type TaskHandler struct {
 	UserResourceMappingService platform.UserResourceMappingService
 	LabelService               platform.LabelService
 	UserService                platform.UserService
+	BucketService              platform.BucketService
 }
 
 const (
@@ -388,7 +393,13 @@ func (h *TaskHandler) createTaskAuthorizationIfNotExists(ctx context.Context, a 
 		return nil
 	}
 
-	ps, err := getPermissions() // convert task to required permissions here
+	spec, err := flux.Compile(ctx, t.Flux, time.Now())
+	if err != nil {
+		return err
+	}
+
+	preAuthorizer := query.NewPreAuthorizer(h.BucketService)
+	ps, err := preAuthorizer.RequiredPermissions(ctx, spec)
 	if err != nil {
 		return err
 	}
